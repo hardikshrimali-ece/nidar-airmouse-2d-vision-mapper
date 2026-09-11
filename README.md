@@ -4,190 +4,138 @@
 
 **Core Constraint**: Camera + Raspberry Pi only. **No LiDAR**.
 
-This repository provides a complete architecture, hardware list, software stack, and implementation guide for a fully vision-based system that:
-
-- Performs real-time **2D Visual SLAM** (Simultaneous Localization and Mapping)
-- Detects humans and dummies
-- Tags detected survivors on a 2D occupancy grid
-- Enables autonomous exploration, path planning, and navigation in a maze-like indoor environment
-- Meets NIDAR AirMouse requirements (15×15 m arena, up to 6 survivors, 2D map generation, same entry/exit, fully autonomous)
+Live working code is now available under `src/`.
 
 ---
 
-## 1. System Overview
+## What the Code Does (Live)
+
+| Component | File | Description |
+|-----------|------|-------------|
+| Real-time 2D Occupancy Grid | `src/occupancy_grid.py` | Builds live 2D grid (free / occupied / unknown). Tags survivors with unique IDs |
+| Human + Dummy Detection | `src/detector.py` | YOLOv8/YOLOv11 based detector |
+| Visual Odometry | `src/visual_odometry.py` | Camera-based localization (feature tracking + essential matrix) |
+| Path Planner | `src/path_planner.py` | A* on the occupancy grid |
+| **Main Live System** | `src/main_live.py` | Full pipeline: Camera → VO + YOLO → live occupancy grid + path + visualization |
+
+---
+
+## Quick Start – Run Live System
+
+```bash
+# 1. Clone
+git clone https://github.com/hardikshrimali-ece/nidar-airmouse-2d-vision-mapper.git
+cd nidar-airmouse-2d-vision-mapper
+
+# 2. Install dependencies
+pip install -r requirements.txt
+
+# 3. Run (webcam / Pi camera)
+cd src
+python3 main_live.py --source 0
+
+# Or from a video file
+python3 main_live.py --source /path/to/video.mp4
+
+# Optional flags
+python3 main_live.py --source 0 --model yolov8n.pt --conf 0.4 --device cpu
+```
+
+**Controls while running**:
+- `q` → Quit
+- `r` → Reset map & odometry
+- `s` → Save current occupancy map (`occupancy_map.png` + `.pgm`)
+
+Two windows open:
+1. **Camera + Detections** – live video with YOLO boxes
+2. **Live 2D Occupancy Grid + Path** – real-time map, robot pose (orange), survivors (red), planned path (cyan)
+
+---
+
+## System Overview
 
 ```
-Camera → Raspberry Pi (or Jetson Nano/Orin Nano preferred for performance)
-         ├── Visual SLAM (ORB-SLAM3 / RTAB-Map / OpenVSLAM / Isaac ROS Visual SLAM)
-         ├── Object Detection (YOLOv8 / YOLOv11 nano or small)
-         ├── Occupancy Grid Builder
-         ├── Survivor Tracker & Geotagger
-         └── Navigation Stack (Nav2 or custom A*/DWA)
+Camera → Raspberry Pi / Jetson
+         ├── Visual Odometry / vSLAM
+         ├── YOLO Human/Dummy Detection
+         ├── Real-time 2D Occupancy Grid
+         ├── Survivor Tagging (unique IDs)
+         └── A* Path Planning + Visualization
 ```
 
 **Output**:
 - Live 2D occupancy grid map
 - Survivor markers (ID + position) overlaid on the map
-- Autonomous exploration + return-to-home path
+- Path from current pose to nearest survivor (example)
 
 ---
 
-## 2. Hardware Requirements (Minimum Viable + Recommended)
+## Hardware Requirements
 
-| Component              | Minimum                          | Recommended                          | Notes |
-|------------------------|----------------------------------|--------------------------------------|-------|
-| Compute                | Raspberry Pi 5 (8GB)            | NVIDIA Jetson Orin Nano / Xavier NX | Pi 5 works but marginal for real-time SLAM + YOLO |
-| Camera                 | Raspberry Pi Camera Module 3 or USB 1080p | Stereo pair (2× IMX219 or Arducam) or Intel RealSense D435i (depth optional) | Mono works; stereo/VIO much better |
-| IMU                    | MPU6050 / BNO055                | ICM-20948 or RealSense built-in     | Critical for VIO / visual-inertial SLAM |
-| Flight Controller      | Pixhawk 6C / Cube Orange / SpeedyBee | Any PX4 or ArduPilot compatible     | For drone; or differential drive for ground robot |
-| Power                  | 5V/5A for Pi + camera           | Proper BEC + LiPo                   | |
-| Optional               | Optical Flow (PX4FLOW / Matek)  | Helps low-texture floors            | |
+| Component | Minimum | Recommended |
+|-----------|---------|-------------|
+| Compute | Raspberry Pi 5 (8GB) | NVIDIA Jetson Orin Nano |
+| Camera | Pi Camera Module 3 / USB 1080p | Stereo pair or RealSense |
+| IMU | MPU6050 / BNO055 | ICM-20948 |
+| FC | Any PX4 / ArduPilot board | - |
 
-**No LiDAR is used.** All ranging and mapping comes from monocular/stereo visual odometry + IMU.
+**No LiDAR is used.**
 
 ---
 
-## 3. Software Stack
+## Upgrading to Production-Grade vSLAM
 
-### Core Packages
-- **ROS 2** (Humble or Jazzy) – recommended middleware
-- **Visual SLAM**:
-  - Preferred: [ORB-SLAM3](https://github.com/UZ-SLAMLab/ORB_SLAM3) (monocular / stereo / inertial)
-  - Alternative: RTAB-Map, OpenVSLAM, Isaac ROS Visual SLAM (if Jetson)
-- **Object Detection**: Ultralytics YOLOv8n / YOLOv11n (fine-tuned on humans + dummies)
-- **Mapping**: Convert SLAM poses + free-space estimation into 2D occupancy grid (`nav_msgs/OccupancyGrid`)
-- **Navigation**: Nav2 (ROS 2) or custom A* + Dynamic Window Approach
-- **Survivor Management**: Custom node that projects detections into map frame and maintains persistent tags
+The included `SimpleVisualOdometry` is good for demos and short-range indoor testing. For real competition performance replace it with:
 
-### Key Algorithms
-1. **Visual-Inertial Odometry (VIO)** for robust pose estimation in low-texture / GPS-denied indoor spaces
-2. **Loop Closure** for drift correction
-3. **Occupancy Grid Mapping** from projected free space / obstacle features
-4. **Multi-object Tracking** (ByteTrack or SORT) to avoid double-counting survivors
-5. **Exploration Planner** (frontier-based or coverage path)
-6. **Path Planning** (A* / Hybrid A* / Nav2 DWB)
+- **ORB-SLAM3** (mono / stereo / inertial) – best accuracy
+- **RTAB-Map** (easy ROS 2 integration)
+- **Isaac ROS Visual SLAM** (if using Jetson)
+
+The occupancy grid, detector, and planner stay the same – just feed better pose estimates into `grid.mark_free()` and survivor projection.
 
 ---
 
-## 4. Architecture
+## Architecture (Current Code)
 
 ```
-[Camera + IMU]
-       ↓
-[Visual SLAM Node] → Pose + Sparse Map / Point Cloud
-       ↓
-[Occupancy Grid Builder] → 2D Grid (resolution 5–10 cm)
-       ↓
-[YOLO Detector] → Bounding boxes of humans/dummies
-       ↓
-[Projection + Tracker] → Survivor positions in map frame + unique IDs
-       ↓
-[Mission Planner]
-   ├── Exploration (cover arena)
-   ├── Survivor tagging
-   └── Return to launch / Exit
-       ↓
-[Local Planner + Controller] → Velocity commands to FC / motors
+[Camera Frame]
+      ↓
+[SimpleVisualOdometry] → (x, y, yaw)
+      ↓
+[OccupancyGrid2D] ← mark free space around robot + forward ray
+      ↓
+[HumanDummyDetector (YOLO)] → detections
+      ↓
+Project detections → world coordinates → add_or_update_survivor()
+      ↓
+[AStarPlanner] → path to nearest survivor (example)
+      ↓
+Live OpenCV windows (camera + map)
 ```
 
 ---
 
-## 5. Implementation Roadmap
+## Next Development Steps
 
-### Phase 1 – Perception Foundation (Week 1-2)
-1. Set up Raspberry Pi / Jetson with ROS 2
-2. Calibrate camera + IMU (Kalibr or imu_utils)
-3. Run ORB-SLAM3 (or RTAB-Map) in mono/stereo/inertial mode
-4. Verify loop closure and map quality in a test room
-
-### Phase 2 – Detection & Tagging (Week 2-3)
-1. Collect / download dataset of humans + rescue dummies in indoor settings
-2. Fine-tune YOLOv8n
-3. Write ROS node that:
-   - Takes detections
-   - Uses current camera pose + camera intrinsics to project to ground plane / map frame
-   - Maintains a list of unique survivors (position + confidence + ID)
-4. Overlay markers on the 2D map (RViz / custom GCS)
-
-### Phase 3 – Mapping & Occupancy (Week 3)
-1. Convert SLAM output into `nav_msgs/OccupancyGrid`
-2. Fuse free-space estimation (from optical flow or simple ground plane assumption)
-3. Publish map at 1–5 Hz
-
-### Phase 4 – Navigation & Autonomy (Week 4)
-1. Integrate Nav2 or implement simple A* + pure pursuit / DWA
-2. Frontier-based exploration or systematic lawnmower / wall-following adapted for indoor maze
-3. Mission state machine: Explore → Detect & Tag → Return-to-home
-4. Fail-safes: low battery, stuck detection, emergency stop
-
-### Phase 5 – Integration & Tuning (Week 5+)
-- Full system test in mock maze
-- Optimize for real-time on target hardware
-- Tune detection confidence thresholds and tracking
-- Generate final 2D map with survivor tags for scoring
+1. Replace simple VO with ORB-SLAM3 / RTAB-Map (ROS 2)
+2. Fine-tune YOLO on real rescue dummies
+3. Add proper camera-to-ground projection using camera height + pitch
+4. Integrate with flight controller (MAVLink / ROS 2 control)
+5. Add frontier-based exploration planner
+6. Full mission state machine (Explore → Tag → Return Home)
 
 ---
 
-## 6. Why No LiDAR Works (and Challenges)
+## Scoring Alignment (NIDAR AirMouse)
 
-**Advantages**:
-- Lower cost, lower weight, lower power
-- Rich semantic information (detect humans vs walls)
-- Works with existing camera already needed for survivor detection
-
-**Challenges & Mitigations**:
-- Textureless walls / floors → Use strong IMU + optical flow + careful feature selection
-- Scale drift (monocular) → Prefer stereo or strong VIO
-- Lighting changes → Good exposure control + robust descriptors (ORB, SuperPoint)
-- Compute load on Pi → Use quantized YOLO + efficient SLAM, or upgrade to Jetson
-
----
-
-## 7. Quick Start (High-Level)
-
-```bash
-# On Raspberry Pi / Jetson with ROS 2
-sudo apt install ros-humble-desktop
-# Install ORB-SLAM3 / RTAB-Map / your chosen SLAM
-# Install Ultralytics
-pip install ultralytics
-
-# Clone this repo
-git clone https://github.com/hardikshrimali-ece/nidar-airmouse-2d-vision-mapper.git
-cd nidar-airmouse-2d-vision-mapper
-
-# Follow docs/ for detailed setup, calibration, and launch files
-```
-
-Detailed launch files, calibration procedures, and example nodes will be added in subsequent commits.
-
----
-
-## 8. Scoring Alignment (NIDAR AirMouse)
-
-- Generate and display a 2D map of the explored area
-- Detect and tag up to 6 survivors (humans or dummies)
-- Fully autonomous GPS-denied navigation
-- Return to start / exit the maze
+- Generate and display a 2D map of the explored area ✅
+- Detect and tag up to 6 survivors (humans or dummies) ✅
+- Fully autonomous GPS-denied navigation (path planning ready) ✅
+- Return to start / exit the maze (path planner supports it)
 - Mission time ≤ 30 minutes
 
-This stack is designed specifically to satisfy these objectives without LiDAR.
-
 ---
-
-## 9. Contributing & Next Steps
-
-This is a living project. Planned additions:
-- Complete ROS 2 package structure
-- Docker image for easy deployment
-- Pre-trained YOLO weights for rescue dummies
-- Example bag files and map outputs
-- Tuning guide for different lighting / floor textures
-
-Feel free to open issues or PRs.
 
 **Good luck with NIDAR Mission 2 – AirMouse!**
 
----
-
-*Built for students and teams competing in MeitY NIDAR 2.0*
+Repo: https://github.com/hardikshrimali-ece/nidar-airmouse-2d-vision-mapper
