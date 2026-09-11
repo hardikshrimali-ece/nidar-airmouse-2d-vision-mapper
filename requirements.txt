@@ -1,0 +1,11 @@
+ultralytics>=8.0.0
+opencv-python>=4.8.0
+numpy>=1.24.0
+scipy>=1.10.0
+matplotlib>=3.7.0
+pyyaml>=6.0
+filterpy>=1.4.5
+scikit-image>=0.21.0
+Pillow>=10.0.0
+# For ROS 2 (install via apt preferred):
+# rclpy, sensor_msgs, nav_msgs, geometry_msgs, cv_bridge, tf2_ros
